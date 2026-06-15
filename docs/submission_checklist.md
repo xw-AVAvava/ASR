@@ -1,4 +1,4 @@
-﻿# Submission Checklist
+# Submission Checklist
 
 Before submission, create one folder containing:
 

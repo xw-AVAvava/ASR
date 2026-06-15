@@ -1,4 +1,4 @@
-﻿# GitHub Repository URL
+# GitHub Repository URL
 
 Final GitHub repository URL:
 
