@@ -1,0 +1,9 @@
+numpy
+scikit-learn
+streamlit
+
+# Optional real ASR dependencies. Install only if time/network/GPU allow it.
+# faster-whisper
+# openai-whisper
+# pyannote.audio
+

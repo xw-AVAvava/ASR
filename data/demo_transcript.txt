@@ -1,0 +1,9 @@
+Professor: Today we are testing a small meeting assistant for automatic speech recognition.
+Student: The first goal is to turn classroom audio into readable text with timestamps.
+Professor: The second goal is to separate different speakers so that we can review who said what.
+Student: We also want a short summary, keywords, and possible action items for the team.
+Professor: In the final experiment we will compare clean audio with noisy audio and check the effect on transcription quality.
+Student: If time is limited, the baseline system is still useful because it shows the complete end to end workflow.
+Professor: The next step is to replace the simple speaker baseline with a stronger diarization model such as pyannote audio.
+Student: We should record a short demo video, explain the limitations honestly, and show the generated report.
+

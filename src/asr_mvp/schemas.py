@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class Segment:
+    start: float
+    end: float
+    text: str
+    speaker: str = "SPEAKER_00"
+
+@dataclass
+class AudioInfo:
+    path: str
+    exists: bool
+    duration_seconds: float | None
+    sample_rate: int | None
+    channels: int | None
+    size_bytes: int | None
+    warning: str | None = None
+
+@dataclass
+class PipelineConfig:
+    audio: Path
+    output: Path
+    engine: str = "auto"
+    model: str = "tiny"
+    compute_type: str = "int8"
+    cpu_threads: int = 1
+    force_cpu_isa: str | None = None
+    asr_prompt: str | None = None
+    use_default_asr_prompt: bool = False
+    replacement_file: Path | None = None
+    polish_text: bool = True
+    merge_gap_seconds: float = 1.0
+    max_merged_chars: int = 90
+    language: str | None = None
+    speakers: int = 2
+    transcript_file: Path | None = None
+    diarizer: str = "turns"
+    speaker_model: Path | None = None
+    reference_file: Path | None = None

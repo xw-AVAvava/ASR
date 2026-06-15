@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.streamlit/
+outputs/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.flac
+*.ogg
+*.webm
