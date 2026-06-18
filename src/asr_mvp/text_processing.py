@@ -3,9 +3,24 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+from difflib import SequenceMatcher
 
 from .schemas import Segment
 
+
+MOJIBAKE_MARKERS = (
+    "浣",
+    "涓",
+    "鍚",
+    "瀹",
+    "鎴",
+    "杩",
+    "鐨",
+    "鏄",
+    "绋",
+    "€",
+    "�",
+)
 
 STOPWORDS = {
     "a",
@@ -95,6 +110,27 @@ CHINESE_KEYWORD_HINTS = [
     "洋河",
 ]
 
+def _mojibake_score(text: str) -> int:
+    return sum(text.count(marker) for marker in MOJIBAKE_MARKERS)
+
+def repair_mojibake(text: str) -> str:
+    """Repair common UTF-8 Chinese text that was accidentally decoded as GBK/CP936."""
+    if not text:
+        return text
+
+    best = text
+    best_score = _mojibake_score(text)
+    for encoding in ("gbk", "cp936"):
+        try:
+            candidate = text.encode(encoding).decode("utf-8")
+        except UnicodeError:
+            continue
+        candidate_score = _mojibake_score(candidate)
+        if candidate_score < best_score:
+            best = candidate
+            best_score = candidate_score
+    return best
+
 def load_replacement_rules(path: Path | None) -> list[tuple[str, str]]:
     if path is None:
         return []
@@ -129,7 +165,8 @@ def load_replacement_rules(path: Path | None) -> list[tuple[str, str]]:
     return rules
 
 def polish_asr_text(text: str, replacements: list[tuple[str, str]] | None = None) -> str:
-    polished = text.strip()
+    polished = repair_mojibake(text.strip())
+    polished = re.sub(r"<\|[^|]+?\|>", "", polished)
     for wrong, right in replacements or []:
         polished = polished.replace(wrong, right)
     polished = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", polished)
@@ -164,6 +201,45 @@ def merge_short_segments(
         else:
             merged.append(Segment(seg.start, seg.end, seg.text, seg.speaker))
     return merged
+
+def compact_text_for_matching(text: str) -> str:
+    text = strip_timestamps(text).lower()
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[^\w\u4e00-\u9fff]+", "", text)
+    return text
+
+def text_similarity(left: str, right: str) -> float:
+    left_key = compact_text_for_matching(left)
+    right_key = compact_text_for_matching(right)
+    if not left_key or not right_key:
+        return 0.0
+    if left_key in right_key or right_key in left_key:
+        return min(len(left_key), len(right_key)) / max(len(left_key), len(right_key))
+    return SequenceMatcher(None, left_key, right_key).ratio()
+
+def remove_repeated_segments(
+    segments: list[Segment],
+    similarity_threshold: float = 0.82,
+    window: int = 6,
+) -> tuple[list[Segment], int]:
+    if not segments:
+        return [], 0
+
+    kept: list[Segment] = []
+    removed = 0
+    for seg in segments:
+        text_key = compact_text_for_matching(seg.text)
+        if len(text_key) < 8:
+            kept.append(seg)
+            continue
+
+        recent = kept[-max(1, window) :]
+        is_repeat = any(text_similarity(seg.text, prev.text) >= similarity_threshold for prev in recent)
+        if is_repeat:
+            removed += 1
+            continue
+        kept.append(seg)
+    return kept, removed
 
 def tokenize(text: str) -> list[str]:
     tokens = [tok.lower() for tok in re.findall(r"[A-Za-z0-9]+", text) if tok.lower() not in STOPWORDS and len(tok) > 2]
@@ -249,3 +325,8 @@ def character_error_rate(reference: str, hypothesis: str) -> float | None:
     if not ref:
         return None
     return edit_distance(ref, hyp) / len(ref)
+
+def accuracy_from_error_rate(error_rate: float | None) -> float | None:
+    if error_rate is None:
+        return None
+    return max(0.0, min(1.0, 1.0 - error_rate))

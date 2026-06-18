@@ -8,6 +8,7 @@ import sys
 
 from .audio_io import load_text
 from .schemas import AudioInfo, PipelineConfig, Segment
+from .text_processing import repair_mojibake
 
 
 def ensure_user_site_packages() -> None:
@@ -198,6 +199,111 @@ def transcribe_with_openai_whisper(config: PipelineConfig) -> list[Segment]:
             segments.append(Segment(float(seg["start"]), float(seg["end"]), text))
     return segments
 
+def _seconds_from_millis(value: object, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number > 1000:
+        return number / 1000.0
+    return number
+
+def _clean_funasr_text(text: object) -> str:
+    cleaned = repair_mojibake(str(text).strip())
+    cleaned = re.sub(r"<\|[^|]+?\|>", "", cleaned)
+    return cleaned.strip()
+
+def _segments_from_funasr_result(result: object, duration: float | None) -> list[Segment]:
+    records = result if isinstance(result, list) else [result]
+    segments: list[Segment] = []
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+
+        sentence_info = record.get("sentence_info")
+        if isinstance(sentence_info, list):
+            for item in sentence_info:
+                if not isinstance(item, dict):
+                    continue
+                text = _clean_funasr_text(item.get("text", ""))
+                if not text:
+                    continue
+                start = _seconds_from_millis(item.get("start"), 0.0)
+                end = _seconds_from_millis(item.get("end"), start + max(1.0, len(text) / 6.0))
+                segments.append(Segment(start=start, end=max(end, start + 0.5), text=text))
+
+        text = _clean_funasr_text(record.get("text", ""))
+        if text and not sentence_info:
+            total = duration if duration and duration > 1 else max(4.0, len(text) / 5.0)
+            segments.extend(segments_from_transcript(text, total))
+
+    return segments
+
+def resolve_funasr_model(model: str) -> str:
+    model_path = Path(model)
+    if model_path.exists():
+        return str(model_path)
+
+    local_candidates = {
+        "iic/SenseVoiceSmall": [Path("D:/asr_models/SenseVoiceSmall")],
+        "SenseVoiceSmall": [Path("D:/asr_models/SenseVoiceSmall")],
+        "paraformer-zh": [Path("D:/asr_models/paraformer-zh")],
+        "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch": [
+            Path("D:/asr_models/paraformer-zh")
+        ],
+    }
+    for candidate in local_candidates.get(model, []):
+        if candidate.exists():
+            return str(candidate)
+    return model
+
+def transcribe_with_funasr(config: PipelineConfig, audio_info: AudioInfo) -> list[Segment]:
+    configure_asr_cpu_runtime(config.force_cpu_isa)
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    from funasr import AutoModel  # type: ignore
+
+    model_name = resolve_funasr_model(config.model or "iic/SenseVoiceSmall")
+    print(f"[ASR] Loading FunASR model: {model_name}", flush=True)
+
+    is_sensevoice = "sensevoice" in model_name.lower()
+    kwargs: dict[str, object] = {
+        "model": model_name,
+        "device": "cpu",
+        "disable_update": True,
+        "vad_model": "fsmn-vad",
+        "vad_kwargs": {"max_single_segment_time": 30000},
+    }
+    if is_sensevoice:
+        kwargs["trust_remote_code"] = True
+    else:
+        kwargs.update(
+            {
+                "punc_model": "ct-punc",
+            }
+        )
+
+    model = AutoModel(**kwargs)
+    print(f"[ASR] Transcribing audio with FunASR: {config.audio}", flush=True)
+    generate_kwargs: dict[str, object] = {
+        "input": str(config.audio),
+        "batch_size_s": 60,
+        "hotword": build_asr_prompt(config) or "",
+    }
+    if is_sensevoice:
+        generate_kwargs.update(
+            {
+                "language": config.language or "auto",
+                "use_itn": True,
+                "merge_vad": True,
+                "merge_length_s": 15,
+            }
+        )
+    result = model.generate(**generate_kwargs)
+    segments = _segments_from_funasr_result(result, audio_info.duration_seconds)
+    print(f"[ASR] Finished FunASR transcription with {len(segments)} text segments.", flush=True)
+    return segments
+
 def transcribe_audio(config: PipelineConfig, audio_info: AudioInfo) -> tuple[list[Segment], str]:
     if config.engine == "demo":
         text = load_text(config.transcript_file) or demo_transcript()
@@ -221,6 +327,14 @@ def transcribe_audio(config: PipelineConfig, audio_info: AudioInfo) -> tuple[lis
         except Exception as exc:
             if config.engine == "openai-whisper":
                 raise RuntimeError(f"openai-whisper failed: {exc}") from exc
+
+    if config.engine in {"auto", "funasr"}:
+        try:
+            model_name = resolve_funasr_model(config.model or "iic/SenseVoiceSmall")
+            return transcribe_with_funasr(config, audio_info), f"FunASR ({model_name})"
+        except Exception as exc:
+            if config.engine == "funasr":
+                raise RuntimeError(f"FunASR failed: {exc}") from exc
 
     text = demo_transcript()
     return segments_from_transcript(text, audio_info.duration_seconds), "demo fallback"

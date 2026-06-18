@@ -34,6 +34,9 @@ class PipelineConfig:
     use_default_asr_prompt: bool = False
     replacement_file: Path | None = None
     polish_text: bool = True
+    remove_repeated_text: bool = True
+    repeat_similarity_threshold: float = 0.82
+    repeat_window: int = 6
     merge_gap_seconds: float = 1.0
     max_merged_chars: int = 90
     language: str | None = None

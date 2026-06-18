@@ -12,10 +12,12 @@ from .diarization import assign_speakers
 from .outputs import write_markdown_outputs
 from .schemas import PipelineConfig, Segment
 from .text_processing import (
+    accuracy_from_error_rate,
     character_error_rate,
     load_replacement_rules,
     merge_short_segments,
     polish_segments,
+    remove_repeated_segments,
     summarize_segments,
     word_error_rate,
 )
@@ -62,6 +64,20 @@ def run_pipeline(config: PipelineConfig) -> dict:
             f"same_speaker={speaker_aware_merge})"
         )
 
+    if config.remove_repeated_text:
+        before_dedup = len(segments)
+        segments, removed_repeats = remove_repeated_segments(
+            segments,
+            similarity_threshold=config.repeat_similarity_threshold,
+            window=config.repeat_window,
+        )
+        if removed_repeats:
+            postprocess_steps.append(
+                f"repeat removal {before_dedup}->{len(segments)} "
+                f"(removed={removed_repeats}, threshold={config.repeat_similarity_threshold}, "
+                f"window={config.repeat_window})"
+            )
+
     if not speaker_aware_merge:
         print("[Pipeline] Assigning speaker labels...", flush=True)
         segments, diarizer_used = assign_speakers(config, segments)
@@ -76,6 +92,8 @@ def run_pipeline(config: PipelineConfig) -> dict:
     raw_cer = character_error_rate(reference, raw_hypothesis) if reference else None
     display_wer = word_error_rate(reference, display_hypothesis) if reference else None
     display_cer = character_error_rate(reference, display_hypothesis) if reference else None
+    raw_accuracy = accuracy_from_error_rate(raw_cer)
+    display_accuracy = accuracy_from_error_rate(display_cer)
 
     metadata = {
         "asr_engine_used": asr_engine_used,
@@ -87,6 +105,8 @@ def run_pipeline(config: PipelineConfig) -> dict:
         "raw_cer": None if raw_cer is None else round(raw_cer, 4),
         "display_wer": None if display_wer is None else round(display_wer, 4),
         "display_cer": None if display_cer is None else round(display_cer, 4),
+        "raw_accuracy": None if raw_accuracy is None else round(raw_accuracy, 4),
+        "display_accuracy": None if display_accuracy is None else round(display_accuracy, 4),
         "raw_segment_count": raw_segment_count,
         "postprocess": "; ".join(postprocess_steps) if postprocess_steps else "none",
     }
@@ -106,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Meeting ASR Assistant MVP pipeline")
     parser.add_argument("--audio", required=True, type=Path, help="Path to an audio file")
     parser.add_argument("--output", required=True, type=Path, help="Output directory")
-    parser.add_argument("--engine", choices=["auto", "demo", "faster-whisper", "openai-whisper"], default="auto")
+    parser.add_argument("--engine", choices=["auto", "demo", "faster-whisper", "openai-whisper", "funasr"], default="auto")
     parser.add_argument("--model", default="tiny", help="ASR model size, for example tiny/base/small")
     parser.add_argument("--compute-type", default="int8", help="faster-whisper compute type, for example int8/float32")
     parser.add_argument("--cpu-threads", type=int, default=1, help="CPU threads used by faster-whisper")
@@ -129,6 +149,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional text or JSON file with ASR correction rules",
     )
     parser.add_argument("--no-polish-text", action="store_true", help="Disable generic text cleanup")
+    parser.add_argument("--no-remove-repeated-text", action="store_true", help="Disable repeated segment removal")
+    parser.add_argument(
+        "--repeat-similarity-threshold",
+        type=float,
+        default=0.82,
+        help="Similarity threshold for repeated segment removal",
+    )
+    parser.add_argument("--repeat-window", type=int, default=6, help="Number of recent segments used when detecting repeated text")
     parser.add_argument("--merge-gap-seconds", type=float, default=1.0, help="Merge nearby short ASR segments")
     parser.add_argument("--max-merged-chars", type=int, default=90, help="Maximum characters after segment merging")
     parser.add_argument("--language", default=None, help="Optional language code such as en or zh")
@@ -154,6 +182,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         use_default_asr_prompt=args.use_default_asr_prompt,
         replacement_file=args.replacement_file,
         polish_text=not args.no_polish_text,
+        remove_repeated_text=not args.no_remove_repeated_text,
+        repeat_similarity_threshold=args.repeat_similarity_threshold,
+        repeat_window=args.repeat_window,
         merge_gap_seconds=args.merge_gap_seconds,
         max_merged_chars=args.max_merged_chars,
         language=args.language,

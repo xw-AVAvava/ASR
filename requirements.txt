@@ -6,4 +6,5 @@ streamlit
 # faster-whisper
 # openai-whisper
 # pyannote.audio
-
+# funasr
+# modelscope
