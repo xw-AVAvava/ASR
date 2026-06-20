@@ -1,0 +1,5 @@
+# Install this file before requirements.txt/requirements-pyannote.txt.
+# The CUDA index is supplied by setup.ps1 or --extra-index-url.
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128

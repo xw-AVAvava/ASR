@@ -173,11 +173,14 @@ def polish_asr_text(text: str, replacements: list[tuple[str, str]] | None = None
     polished = re.sub(r"\s+", " ", polished)
     return polished.strip()
 
+def has_meaningful_text(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z0-9\u4e00-\u9fff]", text))
+
 def polish_segments(segments: list[Segment], replacements: list[tuple[str, str]] | None = None) -> list[Segment]:
     polished_segments = []
     for seg in segments:
         text = polish_asr_text(seg.text, replacements)
-        if text:
+        if has_meaningful_text(text):
             polished_segments.append(Segment(seg.start, seg.end, text, seg.speaker))
     return polished_segments
 

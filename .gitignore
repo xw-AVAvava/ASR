@@ -5,11 +5,14 @@ __pycache__/
 .Python
 .venv/
 venv/
+.runtime/
 .env
 .env.*
 .streamlit/
 outputs/
 models/
 *.log
+*.whl
+/多人对话.wav
 .DS_Store
 Thumbs.db

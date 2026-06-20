@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Optional: only needed for pyannote speaker diarization.
+pyannote.audio==4.0.4
+torchcodec==0.14.0
+torchvision==0.26.0

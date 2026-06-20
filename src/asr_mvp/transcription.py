@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import shutil
 import site
 import sys
 
@@ -20,7 +21,36 @@ def ensure_user_site_packages() -> None:
         pass
 
 
+def ensure_venv_scripts_on_path() -> None:
+    ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    current_path = os.environ.get("PATH", "")
+    path_parts = [part for part in current_path.split(os.pathsep) if part]
+    known_paths = {part.lower() for part in path_parts}
+    scripts_dir = Path(sys.executable).resolve().parent
+    candidate_dirs = [scripts_dir]
+
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        packaged_ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe()).resolve()
+        scripts_ffmpeg = scripts_dir / ffmpeg_name
+        if not scripts_ffmpeg.exists() and packaged_ffmpeg.exists():
+            shutil.copy2(packaged_ffmpeg, scripts_ffmpeg)
+        candidate_dirs.append(packaged_ffmpeg.parent)
+    except Exception:
+        pass
+
+    for candidate_dir in candidate_dirs:
+        if not (candidate_dir / ffmpeg_name).exists():
+            continue
+        candidate_text = str(candidate_dir)
+        if candidate_text.lower() not in known_paths:
+            os.environ["PATH"] = candidate_text + os.pathsep + os.environ.get("PATH", "")
+            known_paths.add(candidate_text.lower())
+
+
 ensure_user_site_packages()
+ensure_venv_scripts_on_path()
 
 
 DEFAULT_ZH_ASR_PROMPT = (
@@ -28,12 +58,51 @@ DEFAULT_ZH_ASR_PROMPT = (
     "尽量保留口语表达、关键信息和自然断句。"
 )
 
+def has_meaningful_text(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z0-9\u4e00-\u9fff]", text))
+
 def split_sentences(text: str) -> list[str]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) > 1:
-        return lines
-    parts = re.split(r"(?<=[.!?])\s+", text.strip())
-    return [part.strip() for part in parts if part.strip()]
+        return [line for line in lines if has_meaningful_text(line)]
+    parts = re.split(r"(?<=[。！？!?；;])\s*", text.strip())
+    if len(parts) <= 1:
+        parts = re.split(r"(?<=[.!?])\s+", text.strip())
+
+    sentences = []
+    for part in parts:
+        part = part.strip()
+        if not has_meaningful_text(part):
+            continue
+        sentences.extend(split_long_sentence(part))
+    return sentences
+
+def split_long_sentence(text: str, max_chars: int = 70) -> list[str]:
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    current = ""
+    clauses = re.split(r"(?<=[，,、])\s*", text)
+    for clause in clauses:
+        clause = clause.strip()
+        if not clause:
+            continue
+        if current and len(current) + len(clause) > max_chars:
+            chunks.append(current)
+            current = clause
+        else:
+            current += clause
+    if current:
+        chunks.append(current)
+
+    final_chunks = []
+    for chunk in chunks:
+        if len(chunk) <= max_chars:
+            final_chunks.append(chunk)
+            continue
+        final_chunks.extend(chunk[i : i + max_chars] for i in range(0, len(chunk), max_chars))
+    return final_chunks
 
 def parse_timestamped_lines(text: str, duration: float | None) -> list[Segment]:
     entries: list[tuple[float, str]] = []
@@ -46,11 +115,16 @@ def parse_timestamped_lines(text: str, duration: float | None) -> list[Segment]:
             match = re.match(r"^\[(\d{1,2}):(\d{2})\]\s*(.+)$", line)
             if match:
                 minutes, seconds, body = match.groups()
-                entries.append((int(minutes) * 60 + int(seconds), body.strip()))
+                body = body.strip()
+                if has_meaningful_text(body):
+                    entries.append((int(minutes) * 60 + int(seconds), body))
             continue
         hours, minutes, seconds, body = match.groups()
+        body = body.strip()
+        if not has_meaningful_text(body):
+            continue
         start = (int(hours or 0) * 3600) + int(minutes) * 60 + int(seconds)
-        entries.append((float(start), body.strip()))
+        entries.append((float(start), body))
 
     if not entries:
         return []
@@ -227,14 +301,14 @@ def _segments_from_funasr_result(result: object, duration: float | None) -> list
                 if not isinstance(item, dict):
                     continue
                 text = _clean_funasr_text(item.get("text", ""))
-                if not text:
+                if not has_meaningful_text(text):
                     continue
                 start = _seconds_from_millis(item.get("start"), 0.0)
                 end = _seconds_from_millis(item.get("end"), start + max(1.0, len(text) / 6.0))
                 segments.append(Segment(start=start, end=max(end, start + 0.5), text=text))
 
         text = _clean_funasr_text(record.get("text", ""))
-        if text and not sentence_info:
+        if has_meaningful_text(text) and not sentence_info:
             total = duration if duration and duration > 1 else max(4.0, len(text) / 5.0)
             segments.extend(segments_from_transcript(text, total))
 
@@ -263,13 +337,21 @@ def transcribe_with_funasr(config: PipelineConfig, audio_info: AudioInfo) -> lis
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     from funasr import AutoModel  # type: ignore
 
+    try:
+        import torch
+
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        device = "cpu"
+
     model_name = resolve_funasr_model(config.model or "iic/SenseVoiceSmall")
     print(f"[ASR] Loading FunASR model: {model_name}", flush=True)
+    print(f"[ASR] Running FunASR on {device}.", flush=True)
 
     is_sensevoice = "sensevoice" in model_name.lower()
     kwargs: dict[str, object] = {
         "model": model_name,
-        "device": "cpu",
+        "device": device,
         "disable_update": True,
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
