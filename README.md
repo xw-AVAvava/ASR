@@ -15,7 +15,17 @@
 
 论文驱动的创新设计与实验方案见 [说话人感知的情绪与音频事件会议分析](docs/innovation_emotion_events.md)。
 
+### 研究参考文献（双VAD融合模块）  
+本项目中双VAD融合与重叠语音检测优化方案参考以下学术文献：  
+ **Attention Is Not Always the Answer: Optimizing Voice Activity Detection with Simple Feature Fusion**  
+    - 发表会议：INTERSPEECH 2025  
+    - 论文链接：[https://arxiv.org/pdf/2506.01365.pdf](https://arxiv.org/pdf/2506.01365.pdf)  
+    - 对应创新点：双VAD决策级交集融合  
+    - 核心支撑：文献验证了融合不同架构的VAD特征可有效降低检测错误率（DER），提升噪声场景鲁棒性。本项目基于该结论，实现SenseVoice声学VAD与pyannote分割VAD的交叉校验，减少端点误判。
+
 说话人标签如 `SPEAKER_00` 只区分声音，不代表真实姓名。
+
+
 
 ## 环境要求
 
@@ -28,11 +38,13 @@
 
 ## 依赖文件
 
-| 文件 | 用途 |
-| --- | --- |
-| `requirements.txt` | GUI、FunASR、ModelScope 和基础 PyTorch |
+
+| 文件                          | 用途                                       |
+| --------------------------- | ---------------------------------------- |
+| `requirements.txt`          | GUI、FunASR、ModelScope 和基础 PyTorch        |
 | `requirements-pyannote.txt` | 在基础依赖上增加 pyannote、TorchCodec、torchvision |
-| `requirements-cuda.txt` | CUDA 12.8 版 torch、torchvision、torchaudio |
+| `requirements-cuda.txt`     | CUDA 12.8 版 torch、torchvision、torchaudio |
+
 
 主要版本：
 
@@ -115,9 +127,9 @@ python -m pip install -r requirements-cuda.txt `
 
 1. 注册并登录 [Hugging Face](https://huggingface.co/)。
 2. 使用同一个账号分别打开并接受以下仓库的使用条件：
-   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
-   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
-   - [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+  - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+  - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+  - [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
 3. 打开 [Access Tokens](https://huggingface.co/settings/tokens)，创建一个 `Read` Token。
 4. 若创建 Fine-grained Token，需要允许读取已获准访问的 gated repositories。
 5. 在启动程序的同一个 PowerShell 窗口中设置：
@@ -162,14 +174,16 @@ http://localhost:8501
 
 SenseVoiceSmall 支持中文、英语、粤语、日语和韩语。在界面的“语言代码”中填写：
 
-| 语言代码 | 录音语言 | 建议使用场景 |
-| --- | --- | --- |
-| `auto` | 自动识别 | 不确定语言，或录音中包含多种语言 |
-| `zh` | 普通话/中文 | 主要内容为普通话时使用 |
-| `en` | 英语 | 主要内容为英语时使用 |
-| `yue` | 粤语 | 主要内容为粤语时使用 |
-| `ja` | 日语 | 主要内容为日语时使用 |
-| `ko` | 韩语 | 主要内容为韩语时使用 |
+
+| 语言代码   | 录音语言   | 建议使用场景           |
+| ------ | ------ | ---------------- |
+| `auto` | 自动识别   | 不确定语言，或录音中包含多种语言 |
+| `zh`   | 普通话/中文 | 主要内容为普通话时使用      |
+| `en`   | 英语     | 主要内容为英语时使用       |
+| `yue`  | 粤语     | 主要内容为粤语时使用       |
+| `ja`   | 日语     | 主要内容为日语时使用       |
+| `ko`   | 韩语     | 主要内容为韩语时使用       |
+
 
 已知录音的主要语言时，建议填写对应代码；中英混合或语言不确定时填写 `auto`。输出中的 `ZH`、`EN`、`YUE`、`JA`、`KO` 是 SenseVoice 对各片段生成的语言标签，不是说话人标签。
 
@@ -227,3 +241,4 @@ git push -u origin codex/gpu-pyannote
 - 重叠语音、远场录音和噪声会降低识别与分人准确率。
 - CER 是逐字指标，经过人工润色但非逐字记录的参考文本会导致指标偏低。
 - CUDA 主要提升速度，不直接提高模型准确率。
+
