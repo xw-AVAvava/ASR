@@ -282,10 +282,107 @@ def _seconds_from_millis(value: object, default: float) -> float:
         return number / 1000.0
     return number
 
+SENSEVOICE_LANGUAGES = {
+    "zh": "ZH",
+    "en": "EN",
+    "yue": "YUE",
+    "ja": "JA",
+    "ko": "KO",
+}
+SENSEVOICE_EMOTIONS = {
+    "HAPPY",
+    "SAD",
+    "ANGRY",
+    "NEUTRAL",
+    "FEARFUL",
+    "DISGUSTED",
+    "SURPRISED",
+}
+SENSEVOICE_EVENTS = {
+    "BGM",
+    "SPEECH",
+    "APPLAUSE",
+    "LAUGHTER",
+    "CRY",
+    "SNEEZE",
+    "BREATH",
+    "COUGH",
+}
+
+
+def _parse_sensevoice_chunks(text: object) -> list[tuple[str, str | None, str | None, list[str]]]:
+    raw = repair_mojibake(str(text).strip())
+    if not raw:
+        return []
+
+    parts = re.split(r"((?:<\|[^|]+?\|>)+)", raw)
+    chunks: list[tuple[str, str | None, str | None, list[str]]] = []
+    for index in range(1, len(parts), 2):
+        tag_block = parts[index]
+        body = parts[index + 1] if index + 1 < len(parts) else ""
+        body = re.sub(r"<\|[^|]+?\|>", "", body).strip()
+        if not has_meaningful_text(body):
+            continue
+
+        language = None
+        emotion = None
+        events: list[str] = []
+        for raw_tag in re.findall(r"<\|([^|]+?)\|>", tag_block):
+            tag = raw_tag.strip()
+            lower_tag = tag.lower()
+            upper_tag = tag.upper()
+            if lower_tag in SENSEVOICE_LANGUAGES:
+                language = SENSEVOICE_LANGUAGES[lower_tag]
+            elif upper_tag in SENSEVOICE_EMOTIONS:
+                emotion = upper_tag
+            elif upper_tag in SENSEVOICE_EVENTS and upper_tag != "SPEECH":
+                events.append(upper_tag)
+        chunks.append((body, language, emotion, events))
+
+    if chunks:
+        return chunks
+
+    cleaned = re.sub(r"<\|[^|]+?\|>", "", raw).strip()
+    return [(cleaned, None, None, [])] if has_meaningful_text(cleaned) else []
+
+
 def _clean_funasr_text(text: object) -> str:
-    cleaned = repair_mojibake(str(text).strip())
-    cleaned = re.sub(r"<\|[^|]+?\|>", "", cleaned)
-    return cleaned.strip()
+    return " ".join(chunk[0] for chunk in _parse_sensevoice_chunks(text)).strip()
+
+
+def _segments_from_sensevoice_chunks(
+    chunks: list[tuple[str, str | None, str | None, list[str]]],
+    duration: float | None,
+) -> list[Segment]:
+    if not chunks:
+        return []
+
+    weights = [max(1, len(text)) for text, _, _, _ in chunks]
+    total_duration = duration if duration and duration > 0 else max(4.0, sum(weights) / 5.0)
+    total_weight = sum(weights)
+    offset = 0.0
+    segments: list[Segment] = []
+
+    for index, ((text, language, emotion, events), weight) in enumerate(zip(chunks, weights)):
+        if index == len(chunks) - 1:
+            chunk_end = total_duration
+        else:
+            chunk_end = offset + total_duration * weight / total_weight
+        local_segments = segments_from_transcript(text, max(0.5, chunk_end - offset))
+        for seg in local_segments:
+            segments.append(
+                Segment(
+                    start=offset + seg.start,
+                    end=offset + seg.end,
+                    text=seg.text,
+                    speaker=seg.speaker,
+                    language=language,
+                    emotion=emotion,
+                    events=list(events),
+                )
+            )
+        offset = chunk_end
+    return segments
 
 def _segments_from_funasr_result(result: object, duration: float | None) -> list[Segment]:
     records = result if isinstance(result, list) else [result]
@@ -300,17 +397,28 @@ def _segments_from_funasr_result(result: object, duration: float | None) -> list
             for item in sentence_info:
                 if not isinstance(item, dict):
                     continue
-                text = _clean_funasr_text(item.get("text", ""))
-                if not has_meaningful_text(text):
-                    continue
                 start = _seconds_from_millis(item.get("start"), 0.0)
-                end = _seconds_from_millis(item.get("end"), start + max(1.0, len(text) / 6.0))
-                segments.append(Segment(start=start, end=max(end, start + 0.5), text=text))
+                raw_text = item.get("text", "")
+                cleaned_text = _clean_funasr_text(raw_text)
+                end = _seconds_from_millis(item.get("end"), start + max(1.0, len(cleaned_text) / 6.0))
+                item_segments = _segments_from_sensevoice_chunks(
+                    _parse_sensevoice_chunks(raw_text),
+                    max(0.5, end - start),
+                )
+                for seg in item_segments:
+                    seg.start += start
+                    seg.end += start
+                segments.extend(item_segments)
 
         text = _clean_funasr_text(record.get("text", ""))
         if has_meaningful_text(text) and not sentence_info:
             total = duration if duration and duration > 1 else max(4.0, len(text) / 5.0)
-            segments.extend(segments_from_transcript(text, total))
+            segments.extend(
+                _segments_from_sensevoice_chunks(
+                    _parse_sensevoice_chunks(record.get("text", "")),
+                    total,
+                )
+            )
 
     return segments
 

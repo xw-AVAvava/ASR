@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -10,6 +10,9 @@ class Segment:
     end: float
     text: str
     speaker: str = "SPEAKER_00"
+    language: str | None = None
+    emotion: str | None = None
+    events: list[str] = field(default_factory=list)
 
 @dataclass
 class AudioInfo:

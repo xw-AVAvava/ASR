@@ -32,7 +32,18 @@ def run_pipeline(config: PipelineConfig) -> dict:
     segments, asr_engine_used = transcribe_audio(config, audio_info)
     if not segments:
         raise RuntimeError("No transcript segments were produced.")
-    raw_segments = [Segment(seg.start, seg.end, seg.text, seg.speaker) for seg in segments]
+    raw_segments = [
+        Segment(
+            seg.start,
+            seg.end,
+            seg.text,
+            seg.speaker,
+            language=seg.language,
+            emotion=seg.emotion,
+            events=list(seg.events),
+        )
+        for seg in segments
+    ]
     raw_segment_count = len(segments)
     postprocess_steps = []
     if config.polish_text:
@@ -160,7 +171,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--merge-gap-seconds", type=float, default=1.0, help="Merge nearby short ASR segments")
     parser.add_argument("--max-merged-chars", type=int, default=90, help="Maximum characters after segment merging")
     parser.add_argument("--language", default=None, help="Optional language code such as en or zh")
-    parser.add_argument("--speakers", type=int, default=2, help="Number of speakers; use 0 for automatic cluster estimation")
+    parser.add_argument(
+        "--speakers",
+        type=int,
+        default=2,
+        help="Number of speakers; use 0 for automatic estimation with cluster or pyannote",
+    )
     parser.add_argument("--transcript-file", type=Path, default=None, help="Optional transcript text for demo mode")
     parser.add_argument("--diarizer", choices=["turns", "cluster", "pyannote", "trained-model"], default="turns")
     parser.add_argument("--speaker-model", type=Path, default=None, help="Optional trained audio classifier .pkl")

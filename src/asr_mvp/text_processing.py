@@ -181,7 +181,17 @@ def polish_segments(segments: list[Segment], replacements: list[tuple[str, str]]
     for seg in segments:
         text = polish_asr_text(seg.text, replacements)
         if has_meaningful_text(text):
-            polished_segments.append(Segment(seg.start, seg.end, text, seg.speaker))
+            polished_segments.append(
+                Segment(
+                    seg.start,
+                    seg.end,
+                    text,
+                    seg.speaker,
+                    language=seg.language,
+                    emotion=seg.emotion,
+                    events=list(seg.events),
+                )
+            )
     return polished_segments
 
 def merge_short_segments(
@@ -192,17 +202,48 @@ def merge_short_segments(
 ) -> list[Segment]:
     if not segments:
         return []
-    merged = [Segment(segments[0].start, segments[0].end, segments[0].text, segments[0].speaker)]
+    first = segments[0]
+    merged = [
+        Segment(
+            first.start,
+            first.end,
+            first.text,
+            first.speaker,
+            language=first.language,
+            emotion=first.emotion,
+            events=list(first.events),
+        )
+    ]
     for seg in segments[1:]:
         current = merged[-1]
         gap = seg.start - current.end
         combined_text = f"{current.text}{seg.text}"
         same_speaker = current.speaker == seg.speaker
-        if gap <= gap_seconds and len(combined_text) <= max_chars and (same_speaker or not require_same_speaker):
+        same_voice_metadata = (
+            current.language == seg.language
+            and current.emotion == seg.emotion
+            and current.events == seg.events
+        )
+        if (
+            gap <= gap_seconds
+            and len(combined_text) <= max_chars
+            and (same_speaker or not require_same_speaker)
+            and same_voice_metadata
+        ):
             current.end = seg.end
             current.text = combined_text
         else:
-            merged.append(Segment(seg.start, seg.end, seg.text, seg.speaker))
+            merged.append(
+                Segment(
+                    seg.start,
+                    seg.end,
+                    seg.text,
+                    seg.speaker,
+                    language=seg.language,
+                    emotion=seg.emotion,
+                    events=list(seg.events),
+                )
+            )
     return merged
 
 def compact_text_for_matching(text: str) -> str:
@@ -264,6 +305,40 @@ def count_text_units(text: str) -> dict[str, int]:
         "mixed_token_count": len(words) + len(cjk_chars),
     }
 
+
+def summarize_voice_metadata(segments: list[Segment]) -> dict:
+    language_counts: dict[str, int] = {}
+    emotion_counts: dict[str, int] = {}
+    event_counts: dict[str, int] = {}
+    speaker_emotions: dict[str, dict[str, int]] = {}
+    speaker_events: dict[str, dict[str, int]] = {}
+
+    for seg in segments:
+        if seg.language:
+            language_counts[seg.language] = language_counts.get(seg.language, 0) + 1
+        if seg.emotion:
+            emotion_counts[seg.emotion] = emotion_counts.get(seg.emotion, 0) + 1
+            speaker_counts = speaker_emotions.setdefault(seg.speaker, {})
+            speaker_counts[seg.emotion] = speaker_counts.get(seg.emotion, 0) + 1
+        for event in seg.events:
+            event_counts[event] = event_counts.get(event, 0) + 1
+            speaker_counts = speaker_events.setdefault(seg.speaker, {})
+            speaker_counts[event] = speaker_counts.get(event, 0) + 1
+
+    dominant_emotion_by_speaker = {
+        speaker: max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+        for speaker, counts in speaker_emotions.items()
+        if counts
+    }
+    return {
+        "language_counts": language_counts,
+        "emotion_counts": emotion_counts,
+        "event_counts": event_counts,
+        "speaker_emotions": speaker_emotions,
+        "speaker_events": speaker_events,
+        "dominant_emotion_by_speaker": dominant_emotion_by_speaker,
+    }
+
 def summarize_segments(segments: list[Segment], max_sentences: int = 3) -> dict:
     full_text = " ".join(seg.text for seg in segments)
     words = tokenize(full_text)
@@ -290,6 +365,7 @@ def summarize_segments(segments: list[Segment], max_sentences: int = 3) -> dict:
         "action_items": actions[:5],
         **count_text_units(full_text),
         "segment_count": len(segments),
+        **summarize_voice_metadata(segments),
     }
 
 def edit_distance(reference_tokens: list[str], hypothesis_tokens: list[str]) -> int:
