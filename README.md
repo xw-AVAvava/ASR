@@ -1,155 +1,210 @@
-# 会议音频智能助手 MVP
+# 会议音频智能助手
 
-这是一个机器学习课程项目原型，用于把多人对话音频整理成可阅读、可评估、可展示的结构化材料。
+本项目将会议、访谈等音频转换为带时间戳和匿名说话人标签的文本，并生成摘要、关键词、CER/WER 指标及 Markdown/JSON 报告。
 
-核心输出包括：
+## 功能
 
-- 原始 ASR 转写文本
-- 清理后的带时间戳 transcript
-- 匿名说话人标签，例如 `SPEAKER_00`
-- 自动摘要、关键词和行动项
-- WER/CER 等评估指标
-- Markdown/JSON 实验报告
+- FunASR SenseVoiceSmall 中文语音识别
+- pyannote.audio 多说话人分离（可选）
+- MFCC + KMeans 说话人聚类（无需 Hugging Face Token）
+- 单人音频快速模式：人数设为 `1` 时跳过说话人模型
+- NVIDIA CUDA 自动加速，无可用显卡时回退 CPU
+- Streamlit 可视化界面
+- 原始文本、整理文本、摘要、报告和结构化 JSON 输出
 
-## 项目思路
+说话人标签如 `SPEAKER_00` 只区分声音，不代表真实姓名。
 
-本项目对应课程项目中的 ASR、多说话人对话、speaker diarization 和本地音频处理方向。整体流程是：
+## 环境要求
 
-```text
-音频输入 -> ASR/人工转写 -> 文本清理 -> 说话人聚类 -> 摘要与评估 -> 报告输出
-```
+- Windows 10/11
+- Python 3.12（推荐）
+- 约 8 GB 可用磁盘空间；首次使用时模型会下载到用户缓存目录
+- NVIDIA 显卡可选，本项目测试环境为 RTX 4060 Laptop GPU
 
-说话人标签分为两个层次：
+不要提交 `.venv`、模型缓存或 Token。虚拟环境包含本机路径和平台相关二进制，无法保证换一台电脑后仍可运行。
 
-- `turns`：轮流标签基线，适合快速演示完整流程。
-- `cluster`：从 ASR 时间片中切出音频，提取频谱/MFCC-like 特征，用 KMeans 聚类成匿名说话人标签。
+## 依赖文件
 
-注意：当前系统做的是匿名 speaker diarization，不是识别真实姓名。如果要识别真实身份，需要每个人的参考声音样本或人工标注。
+| 文件 | 用途 |
+| --- | --- |
+| `requirements.txt` | GUI、FunASR、ModelScope 和基础 PyTorch |
+| `requirements-pyannote.txt` | 在基础依赖上增加 pyannote、TorchCodec、torchvision |
+| `requirements-cuda.txt` | CUDA 12.8 版 torch、torchvision、torchaudio |
 
-## 项目架构
+主要版本：
 
-主代码已经拆成模块化结构：
+- FunASR `1.3.10`
+- ModelScope `1.37.1`
+- pyannote.audio `4.0.4`（可选）
+- PyTorch `2.11.0`
+- Streamlit `1.58.0`
+- scikit-learn `1.9.0`
 
-```text
-src/asr_mvp/
-  schemas.py          数据结构
-  audio_io.py         音频检查和文本读取
-  transcription.py    ASR 与人工 transcript 解析
-  diarization.py      说话人标签与聚类
-  text_processing.py  文本清理、摘要、WER/CER
-  outputs.py          Markdown/JSON 输出
-  pipeline.py         主流程编排
-```
+## 一键安装
 
-详细说明见：
+### 方案 A：使用项目虚拟环境
 
-```text
-project/asr_meeting_assistant/docs/architecture.md
-```
-
-## 图形界面 GUI
-
-在项目根目录运行：
+基础 FunASR，CPU 或由本机 PyTorch 自动选择设备：
 
 ```powershell
-python -m streamlit run project\asr_meeting_assistant\app.py
+cd C:\Users\你的用户名\ASR
+.\setup.ps1
 ```
 
-然后打开：
+FunASR + NVIDIA CUDA：
+
+```powershell
+.\setup.ps1 -Cuda
+```
+
+FunASR + pyannote：
+
+```powershell
+.\setup.ps1 -Pyannote
+```
+
+完整 CUDA + pyannote 环境：
+
+```powershell
+.\setup.ps1 -Cuda -Pyannote
+```
+
+CUDA 官方源较慢时可切换南京大学镜像：
+
+```powershell
+.\setup.ps1 -Cuda -Pyannote `
+  -TorchIndexUrl "https://mirror.nju.edu.cn/pytorch/whl/cu128"
+```
+
+脚本默认创建 `.venv`。pyannote 模式还会把 Windows shared FFmpeg 下载到 `.runtime/`，这两个目录都已被 Git 忽略。
+
+### 方案 B：使用已有 Python/Conda 环境
+
+先激活自己的环境，然后运行：
+
+```powershell
+conda activate 你的环境名
+.\setup.ps1 -UseCurrentEnvironment
+```
+
+根据需要组合参数：
+
+```powershell
+.\setup.ps1 -UseCurrentEnvironment -Cuda
+.\setup.ps1 -UseCurrentEnvironment -Pyannote
+.\setup.ps1 -UseCurrentEnvironment -Cuda -Pyannote
+```
+
+也可以手动安装：
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-pyannote.txt
+python -m pip install -r requirements-cuda.txt `
+  --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+只安装实际需要的文件。未使用 pyannote 时，不需要安装 `requirements-pyannote.txt`，也不需要 Hugging Face Token。
+
+## pyannote 与 Hugging Face Token（可选）
+
+只有在界面选择 `pyannote` 说话人标注时才需要以下步骤。使用 `cluster`、`turns`，或者将说话人数设为 `1` 时均不需要 Token。
+
+1. 注册并登录 [Hugging Face](https://huggingface.co/)。
+2. 使用同一个账号分别打开并接受以下仓库的使用条件：
+   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+   - [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+3. 打开 [Access Tokens](https://huggingface.co/settings/tokens)，创建一个 `Read` Token。
+4. 若创建 Fine-grained Token，需要允许读取已获准访问的 gated repositories。
+5. 在启动程序的同一个 PowerShell 窗口中设置：
+
+```powershell
+$env:HF_TOKEN="hf_你的Token"
+```
+
+Token 相当于密码。不要把它写进代码、`.env`、截图、聊天记录或 Git 提交。每位协作者应使用自己的 Token。
+
+## 启动可视化界面
+
+使用项目 `.venv`：
+
+```powershell
+.\run_gui.ps1
+```
+
+使用当前已激活的 Python/Conda 环境：
+
+```powershell
+.\run_gui.ps1 -UseCurrentEnvironment
+```
+
+打开：
 
 ```text
 http://localhost:8501
 ```
 
-GUI 支持：
+界面操作：
 
-- 运行真实多人对话样本
-- 上传自定义音频
-- 使用已有 transcript 或自动 ASR
-- 选择说话人标注方法：`cluster`、`turns`、`pyannote`、`trained-model`
-- 查看摘要、转写文本、报告和 JSON 片段
+1. 选择项目样本或上传音频。
+2. 选择 `FunASR SenseVoiceSmall`。
+3. 语言代码填写 `zh`。
+4. 单人音频将人数设为 `1`，程序会跳过说话人分离以节省时间。
+5. 多人音频可选择 `cluster` 或 `pyannote`；pyannote 通常更准确，但需要额外依赖和 Token。
+6. 点击“运行处理流程”。
 
-## 真实多人对话样本
+首次运行会下载 SenseVoice 和 pyannote 模型，之后从本地缓存加载。
 
-项目默认使用你放入的音频和文本：
+真实示例录音不会提交到公开仓库。clone 后请在界面上传自己的音频；如已通过其他受控渠道取得 `多人对话.wav`，可将它放在项目根目录。
 
-```text
-project/多人对话.wav
-project/多人对话文本.txt
-```
+## 输出
 
-人工 transcript 模式，运行快、稳定，适合检查流程：
-
-```powershell
-python project\asr_meeting_assistant\run_pipeline.py `
-  --audio project\多人对话.wav `
-  --transcript-file project\多人对话文本.txt `
-  --reference-file project\多人对话文本.txt `
-  --output project\asr_meeting_assistant\outputs\real_dialogue_human_transcript `
-  --engine demo `
-  --language zh `
-  --speakers 5 `
-  --diarizer cluster
-```
-
-真实 ASR + 匿名说话人聚类模式：
-
-```powershell
-python project\asr_meeting_assistant\run_pipeline.py `
-  --audio project\多人对话.wav `
-  --reference-file project\多人对话文本.txt `
-  --output project\asr_meeting_assistant\outputs\real_asr_base_cluster `
-  --engine faster-whisper `
-  --model base `
-  --language zh `
-  --speakers 5 `
-  --diarizer cluster
-```
-
-## ASR 环境检查
-
-如果使用 `faster-whisper`：
-
-```powershell
-python -m pip install faster-whisper -i https://pypi.tuna.tsinghua.edu.cn/simple
-python project\asr_meeting_assistant\check_asr_setup.py
-python project\asr_meeting_assistant\test_whisper_load.py
-```
-
-如果 `test_whisper_load.py` 能成功加载模型，就可以运行真实 ASR。
-
-## 输出文件
-
-每次运行会在 `--output` 指定目录生成：
+运行结果写入 `outputs/gui_last_run/`：
 
 ```text
-raw_transcript.md   原始 ASR 文本
-transcript.md       清理后的带 speaker 标签文本
-summary.md          摘要、关键词、行动项
-report.md           实验报告
-segments.json       结构化片段
-metrics.json        指标和运行元数据
+raw_transcript.md
+transcript.md
+summary.md
+report.md
+segments.json
+metrics.json
 ```
 
-`outputs/` 是运行产物，已经加入 `.gitignore`，最终提交时重点提交源码和文档。
+`outputs/` 已加入 `.gitignore`。
 
-## 可选扩展
+## 项目结构
 
-项目保留了监督学习训练脚本：
+```text
+app.py                     Streamlit GUI
+setup.ps1                  可选虚拟环境/当前环境安装脚本
+run_gui.ps1                GUI 启动脚本
+requirements*.txt          分层依赖清单
+src/asr_mvp/transcription.py
+src/asr_mvp/diarization.py
+src/asr_mvp/pipeline.py
+src/asr_mvp/text_processing.py
+```
+
+## Git 协作
+
+推荐在功能分支提交：
 
 ```powershell
-python project\asr_meeting_assistant\train_audio_classifier.py `
-  --data-dir project\asr_meeting_assistant\data\labeled_audio `
-  --output project\asr_meeting_assistant\outputs\audio_classifier `
-  --test-size 0.3
+git switch -c codex/gpu-pyannote
+git add .gitignore README.md app.py setup.ps1 run_gui.ps1 requirements*.txt src
+git add "多人对话文本.txt"
+git status
+git diff --cached
+git commit -m "Improve FunASR and pyannote workflow"
+git push -u origin codex/gpu-pyannote
 ```
 
-这个脚本只应该用于我们自己准备的带标签音频数据，不使用老师提供的范例项目材料。没有自备标签数据时，不把它作为最终项目核心成果。
+真实录音可能包含声音、姓名和谈话内容。根目录的 `多人对话.wav` 已被忽略，请通过获得授权的受控渠道分享测试音频。
 
-## 视频展示建议
+## 已知限制
 
-1. 展示问题：多人会议/访谈音频难以检索、总结和复盘。
-2. 展示系统流程：音频、ASR、匿名 speaker 标签、摘要、指标、报告。
-3. 展示 GUI：运行真实多人对话样本。
-4. 展示课程 ML 连接：MFCC-like 特征、标准化、KMeans 聚类、CER/WER。
-5. 诚实说明局限：当前是课程级 diarization 原型，不是商业级 ASR/真实身份识别系统。
+- pyannote 输出的是匿名说话人，不会自动识别真实姓名。
+- 重叠语音、远场录音和噪声会降低识别与分人准确率。
+- CER 是逐字指标，经过人工润色但非逐字记录的参考文本会导致指标偏低。
+- CUDA 主要提升速度，不直接提高模型准确率。

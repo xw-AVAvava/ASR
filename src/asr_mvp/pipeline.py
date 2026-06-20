@@ -160,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--merge-gap-seconds", type=float, default=1.0, help="Merge nearby short ASR segments")
     parser.add_argument("--max-merged-chars", type=int, default=90, help="Maximum characters after segment merging")
     parser.add_argument("--language", default=None, help="Optional language code such as en or zh")
-    parser.add_argument("--speakers", type=int, default=2, help="Number of speakers for the baseline diarizer")
+    parser.add_argument("--speakers", type=int, default=2, help="Number of speakers; use 0 for automatic cluster estimation")
     parser.add_argument("--transcript-file", type=Path, default=None, help="Optional transcript text for demo mode")
     parser.add_argument("--diarizer", choices=["turns", "cluster", "pyannote", "trained-model"], default="turns")
     parser.add_argument("--speaker-model", type=Path, default=None, help="Optional trained audio classifier .pkl")

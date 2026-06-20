@@ -10,15 +10,14 @@ from typing import Any
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = ROOT.parent
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from asr_mvp import PipelineConfig, run_pipeline
 
-REAL_AUDIO = PROJECT_ROOT / "多人对话.wav"
-REAL_TRANSCRIPT = PROJECT_ROOT / "多人对话文本.txt"
+REAL_AUDIO = ROOT / "多人对话.wav"
+REAL_TRANSCRIPT = ROOT / "多人对话文本.txt"
 MODEL_BASE = ROOT / "models" / "faster-whisper-base"
 MODEL_MEDIUM = ROOT / "models" / "faster-whisper-medium"
 GUI_OUTPUT = ROOT / "outputs" / "gui_last_run"
@@ -213,19 +212,25 @@ st.caption("现在支持 faster-whisper 和 FunASR。中文专用模型是 FunAS
 
 with st.sidebar:
     st.header("运行设置")
-    input_mode = st.radio("输入来源", ["项目自带多人对话", "上传自定义音频"], index=0)
+    input_mode = st.radio(
+        "输入来源",
+        ["项目自带多人对话", "上传自定义音频"],
+        index=0 if REAL_AUDIO.exists() else 1,
+    )
 
     if input_mode == "项目自带多人对话":
-        audio_path = REAL_AUDIO
+        audio_path = REAL_AUDIO if REAL_AUDIO.exists() else None
         default_reference = read_text(REAL_TRANSCRIPT)
         default_transcript = default_reference
         default_speakers = 5
+        if audio_path is None:
+            st.warning("本地示例音频不存在，请上传音频文件。")
     else:
         uploaded_audio = st.file_uploader("上传音频", type=["wav", "mp3", "m4a", "mp4", "flac"])
         audio_path = save_uploaded_audio(uploaded_audio)
         default_reference = ""
         default_transcript = ""
-        default_speakers = 1
+        default_speakers = 2
 
     mode = st.radio("转写模式", ["真实 ASR", "使用已有 transcript"], index=0)
     options = model_options()
@@ -233,14 +238,21 @@ with st.sidebar:
     selected_model = options[model_label]
 
     language = st.text_input("语言代码", value="zh")
-    speakers = st.slider("说话人数量", min_value=1, max_value=8, value=default_speakers)
     diarizer = st.selectbox("说话人标注", ["cluster", "turns", "pyannote"], index=0)
+    auto_speakers = st.checkbox("自动估计说话人数量", value=True, disabled=diarizer != "cluster")
+    speakers = st.slider(
+        "说话人数量",
+        min_value=1,
+        max_value=8,
+        value=default_speakers,
+        disabled=diarizer == "cluster" and auto_speakers,
+    )
     compute_type = st.selectbox("Whisper 计算精度", ["int8", "float32"], index=0, disabled=mode != "真实 ASR" or selected_model["engine"] != "faster-whisper")
     cpu_threads = st.slider("CPU 线程", min_value=1, max_value=4, value=1, disabled=mode != "真实 ASR" or selected_model["engine"] != "faster-whisper")
     remove_repeated_text = st.checkbox("去除重复语句", value=True)
 
     st.divider()
-    run_clicked = st.button("运行处理流程", type="primary", use_container_width=True)
+    run_clicked = st.button("运行处理流程", type="primary", width="stretch")
 
 if audio_path is None:
     st.warning("请先上传音频文件。")
@@ -287,7 +299,7 @@ with main_tab:
                 compute_type=compute_type,
                 cpu_threads=int(cpu_threads),
                 language=language or None,
-                speakers=int(speakers),
+                speakers=0 if diarizer == "cluster" and auto_speakers else int(speakers),
                 transcript_file=transcript_file,
                 reference_file=reference_file,
                 diarizer=diarizer,
@@ -301,7 +313,9 @@ with main_tab:
                     st.success(
                         "处理完成："
                         f"{result['metadata']['asr_engine_used']}，"
-                        f"Raw CER={format_metric(result['metadata'].get('raw_cer'))}"
+                        f"Raw CER={format_metric(result['metadata'].get('raw_cer'))}，"
+                        f"Display CER={format_metric(result['metadata'].get('display_cer'))}，"
+                        f"Display Accuracy={format_percent(result['metadata'].get('display_accuracy'))}"
                     )
                 except Exception as exc:
                     st.error(f"处理失败：{exc}")
@@ -332,7 +346,7 @@ with compare_tab:
                 }
             )
     if rows:
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     else:
         st.info("还没有可对比的实验结果。")
 

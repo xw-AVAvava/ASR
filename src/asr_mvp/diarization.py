@@ -2,11 +2,55 @@ from __future__ import annotations
 
 import os
 import pickle
+from pathlib import Path
+import sys
 
 import numpy as np
 
 from .audio_features import extract_features_from_array, extract_speaker_embedding_from_array, load_wav_mono, slice_audio
 from .schemas import PipelineConfig, Segment
+
+
+_DLL_DIRECTORY_HANDLES: list[object] = []
+_DLL_DIRECTORY_PATHS: set[str] = set()
+
+
+def ensure_windows_audio_dlls() -> None:
+    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
+        return
+
+    venv_root = Path(sys.executable).resolve().parent.parent
+    candidate_dirs = list((venv_root / "ffmpeg-shared").glob("*/bin"))
+
+    try:
+        import torch
+
+        candidate_dirs.append(Path(torch.__file__).resolve().parent / "lib")
+    except Exception:
+        pass
+
+    for path_part in os.environ.get("PATH", "").split(os.pathsep):
+        if not path_part:
+            continue
+        path_dir = Path(path_part)
+        try:
+            if any(path_dir.glob("avcodec-*.dll")):
+                candidate_dirs.append(path_dir)
+        except OSError:
+            continue
+
+    for candidate_dir in candidate_dirs:
+        try:
+            resolved = candidate_dir.resolve()
+            key = str(resolved).lower()
+            if key in _DLL_DIRECTORY_PATHS or not resolved.is_dir():
+                continue
+            handle = os.add_dll_directory(str(resolved))
+        except OSError:
+            continue
+        _DLL_DIRECTORY_HANDLES.append(handle)
+        _DLL_DIRECTORY_PATHS.add(key)
+        os.environ["PATH"] = str(resolved) + os.pathsep + os.environ.get("PATH", "")
 
 
 def assign_speakers_turn_based(segments: list[Segment], speakers: int) -> list[Segment]:
@@ -18,17 +62,66 @@ def assign_speakers_turn_based(segments: list[Segment], speakers: int) -> list[S
         seg.speaker = f"SPEAKER_{i % speakers:02d}"
     return segments
 
+def estimate_speaker_count(X: np.ndarray, max_speakers: int = 8) -> int:
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+
+    sample_count = X.shape[0]
+    if sample_count <= 1:
+        return 1
+    if sample_count == 2:
+        return 2
+
+    max_k = max(2, min(max_speakers, sample_count - 1))
+    best_k = 2
+    best_score = -1.0
+    for k in range(2, max_k + 1):
+        labels = KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(X)
+        if len(set(int(label) for label in labels)) < 2:
+            continue
+        score = float(silhouette_score(X, labels))
+        if score > best_score:
+            best_score = score
+            best_k = k
+    return best_k
+
 def assign_speakers_pyannote(config: PipelineConfig, segments: list[Segment]) -> list[Segment]:
+    ensure_windows_audio_dlls()
     from pyannote.audio import Pipeline  # type: ignore
+    import torch
 
     token = os.environ.get("HF_TOKEN")
     if not token:
         raise RuntimeError("HF_TOKEN is required for pyannote.audio diarization.")
-    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
-    diarization = pipeline(str(config.audio))
+    try:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=token)
+    except TypeError:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
+    if pipeline is None:
+        raise RuntimeError("Could not load pyannote pipeline. Check HF_TOKEN and model access permissions.")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pipeline.to(device)
+    print(f"[Diarization] Running pyannote on {device}.", flush=True)
+
+    try:
+        audio = load_wav_mono(config.audio)
+        waveform = torch.from_numpy(audio.samples).unsqueeze(0)
+        pipeline_input: object = {"waveform": waveform, "sample_rate": audio.sample_rate}
+    except Exception:
+        pipeline_input = str(config.audio)
+
+    if config.speakers > 0:
+        diarization = pipeline(pipeline_input, num_speakers=config.speakers)
+    else:
+        diarization = pipeline(pipeline_input)
+
+    annotation = getattr(diarization, "speaker_diarization", diarization)
+    if not hasattr(annotation, "itertracks"):
+        raise RuntimeError(f"Unsupported pyannote output type: {type(diarization).__name__}")
 
     diarized_turns = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
+    for turn, _, speaker in annotation.itertracks(yield_label=True):
         diarized_turns.append((float(turn.start), float(turn.end), str(speaker)))
 
     for seg in segments:
@@ -69,12 +162,6 @@ def assign_speakers_with_clustering(config: PipelineConfig, segments: list[Segme
     if not segments:
         return segments
 
-    speakers = max(1, min(config.speakers, len(segments)))
-    if speakers == 1:
-        for seg in segments:
-            seg.speaker = "SPEAKER_00"
-        return segments
-
     audio = load_wav_mono(config.audio)
     embeddings = []
     valid_indexes = []
@@ -85,11 +172,21 @@ def assign_speakers_with_clustering(config: PipelineConfig, segments: list[Segme
         embeddings.append(extract_speaker_embedding_from_array(audio_slice))
         valid_indexes.append(index)
 
-    if len(embeddings) < speakers:
-        return assign_speakers_turn_based(segments, speakers)
+    if not embeddings:
+        return assign_speakers_turn_based(segments, max(1, config.speakers))
 
     X = np.vstack(embeddings).astype(np.float32)
     X = StandardScaler().fit_transform(X)
+    if config.speakers <= 0:
+        speakers = estimate_speaker_count(X, max_speakers=8)
+    else:
+        speakers = max(1, min(config.speakers, len(embeddings)))
+
+    if speakers == 1:
+        for seg in segments:
+            seg.speaker = "SPEAKER_00"
+        return segments
+
     labels = KMeans(n_clusters=speakers, random_state=42, n_init=10).fit_predict(X)
 
     # KMeans cluster IDs are arbitrary, so rename them by first appearance in time.
@@ -106,9 +203,19 @@ def assign_speakers_with_clustering(config: PipelineConfig, segments: list[Segme
     return segments
 
 def assign_speakers(config: PipelineConfig, segments: list[Segment]) -> tuple[list[Segment], str]:
+    if config.speakers == 1:
+        for seg in segments:
+            seg.speaker = "SPEAKER_00"
+        return segments, "single speaker (diarization skipped)"
+
     if config.diarizer == "cluster":
         try:
-            return assign_speakers_with_clustering(config, segments), "MFCC + KMeans speaker clustering"
+            clustered = assign_speakers_with_clustering(config, segments)
+            label = "MFCC + KMeans speaker clustering"
+            if config.speakers <= 0:
+                speaker_count = len({seg.speaker for seg in clustered})
+                label += f" (auto estimated {speaker_count} speakers)"
+            return clustered, label
         except Exception as exc:
             return assign_speakers_turn_based(segments, config.speakers), f"turn baseline (speaker clustering unavailable: {exc})"
     if config.diarizer == "trained-model":
