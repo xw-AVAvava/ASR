@@ -229,3 +229,75 @@ def assign_speakers(config: PipelineConfig, segments: list[Segment]) -> tuple[li
         except Exception as exc:
             return assign_speakers_turn_based(segments, config.speakers), f"turn baseline (pyannote unavailable: {exc})"
     return assign_speakers_turn_based(segments, config.speakers), "turn baseline"
+from typing import List, Tuple
+
+def merge_vad_segments(
+    sensevoice_segments: List[Tuple[float, float]],
+    pyannote_segments: List[Tuple[float, float]],
+    overlap_threshold: float = 0.3
+) -> List[Tuple[float, float]]:
+    """
+    双VAD结果融合：取两个VAD结果的交集作为最终有效语音段
+    降低噪声、静音误判对识别准确率的影响
+    :param sensevoice_segments: SenseVoice输出的语音段列表 [(start, end), ...]
+    :param pyannote_segments: pyannote输出的语音段列表 [(start, end), ...]
+    :param overlap_threshold: 最小重叠比例阈值
+    :return: 融合后的有效语音段列表
+    """
+    merged = []
+    for sv_start, sv_end in sensevoice_segments:
+        sv_duration = sv_end - sv_start
+        for py_start, py_end in pyannote_segments:
+            overlap_start = max(sv_start, py_start)
+            overlap_end = min(sv_end, py_end)
+            if overlap_end <= overlap_start:
+                continue
+            overlap_duration = overlap_end - overlap_start
+            if overlap_duration / sv_duration >= overlap_threshold:
+                merged.append((overlap_start, overlap_end))
+                break
+    return _merge_close_segments(merged, gap=0.2)
+
+
+def detect_overlap_speech(
+    speaker_segments: List[dict],
+    min_overlap_duration: float = 0.3
+) -> List[Tuple[float, float]]:
+    """
+    检测多人重叠说话时间段，对应cross-speech研究方向
+    :param speaker_segments: 说话人分段列表，每个元素含start, end, speaker
+    :param min_overlap_duration: 最小时长阈值
+    :return: 重叠语音段列表
+    """
+    timestamps = []
+    for seg in speaker_segments:
+        timestamps.append((seg["start"], 1))
+        timestamps.append((seg["end"], -1))
+    timestamps.sort(key=lambda x: (x[0], x[1]))
+    
+    overlap_segments = []
+    current_speakers = 0
+    overlap_start = None
+    for time, delta in timestamps:
+        current_speakers += delta
+        if current_speakers >= 2 and overlap_start is None:
+            overlap_start = time
+        elif current_speakers < 2 and overlap_start is not None:
+            if time - overlap_start >= min_overlap_duration:
+                overlap_segments.append((overlap_start, time))
+            overlap_start = None
+    return overlap_segments
+
+
+def _merge_close_segments(segments: List[Tuple[float, float]], gap: float) -> List[Tuple[float, float]]:
+    """合并间隔小于gap的相邻片段，避免碎片化"""
+    if not segments:
+        return []
+    segments.sort()
+    merged = [list(segments[0])]
+    for start, end in segments[1:]:
+        if start - merged[-1][1] <= gap:
+            merged[-1][1] = end
+        else:
+            merged.append([start, end])
+    return [(s, e) for s, e in merged]
