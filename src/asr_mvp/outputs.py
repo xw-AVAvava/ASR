@@ -7,6 +7,18 @@ from .audio_io import format_timestamp
 from .schemas import AudioInfo, PipelineConfig, Segment
 
 
+def format_voice_labels(seg: Segment) -> str:
+    labels = [label for label in (seg.language, seg.emotion) if label]
+    labels.extend(seg.events)
+    return " ".join(f"[{label}]" for label in labels)
+
+
+def format_count_map(counts: dict[str, int]) -> str:
+    if not counts:
+        return "无"
+    return ", ".join(f"{label}={count}" for label, count in sorted(counts.items()))
+
+
 def write_markdown_outputs(
     config: PipelineConfig,
     audio_info: AudioInfo,
@@ -27,13 +39,42 @@ def write_markdown_outputs(
     if raw_segments is not None:
         raw_lines = ["# 原始 ASR 转写文本", ""]
         for seg in raw_segments:
-            raw_lines.append(f"- `{format_timestamp(seg.start)} -> {format_timestamp(seg.end)}`: {seg.text}")
+            voice_labels = format_voice_labels(seg)
+            label_prefix = f" {voice_labels}" if voice_labels else ""
+            raw_lines.append(
+                f"- `{format_timestamp(seg.start)} -> {format_timestamp(seg.end)}`{label_prefix}: {seg.text}"
+            )
         (config.output / "raw_transcript.md").write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
 
     transcript_lines = ["# 清理后的带说话人标签转写文本", ""]
     for seg in segments:
-        transcript_lines.append(f"- `{format_timestamp(seg.start)} -> {format_timestamp(seg.end)}` **{seg.speaker}**: {seg.text}")
+        voice_labels = format_voice_labels(seg)
+        label_suffix = f" {voice_labels}" if voice_labels else ""
+        transcript_lines.append(
+            f"- `{format_timestamp(seg.start)} -> {format_timestamp(seg.end)}` "
+            f"**{seg.speaker}**{label_suffix}: {seg.text}"
+        )
     (config.output / "transcript.md").write_text("\n".join(transcript_lines) + "\n", encoding="utf-8")
+
+    speaker_emotion_lines = [
+        f"- **{speaker}**: 主导情绪 `{summary['dominant_emotion_by_speaker'].get(speaker, 'N/A')}`；"
+        f"{format_count_map(counts)}"
+        for speaker, counts in sorted(summary["speaker_emotions"].items())
+    ]
+    speaker_event_lines = [
+        f"- **{speaker}**: {format_count_map(counts)}"
+        for speaker, counts in sorted(summary["speaker_events"].items())
+    ]
+    emotion_timeline = []
+    previous_emotion: dict[str, str] = {}
+    for seg in sorted(segments, key=lambda item: item.start):
+        if not seg.emotion or previous_emotion.get(seg.speaker) == seg.emotion:
+            continue
+        previous_emotion[seg.speaker] = seg.emotion
+        preview = seg.text if len(seg.text) <= 70 else seg.text[:67] + "..."
+        emotion_timeline.append(
+            f"- `{format_timestamp(seg.start)}` **{seg.speaker}** -> `{seg.emotion}`: {preview}"
+        )
 
     summary_lines = [
         "# 摘要",
@@ -49,6 +90,19 @@ def write_markdown_outputs(
         "## 行动项",
         "",
         *([f"- {item}" for item in summary["action_items"]] or ["没有发现明确行动项。"]),
+        "",
+        "## 说话人情绪",
+        "",
+        *(speaker_emotion_lines or ["没有检测到情绪标签。"]),
+        "",
+        "## 音频事件",
+        "",
+        f"- 总体事件: {format_count_map(summary['event_counts'])}",
+        *(speaker_event_lines or ["- 没有检测到说话人相关音频事件。"]),
+        "",
+        "## 情绪转折时间线",
+        "",
+        *(emotion_timeline or ["没有检测到情绪转折。"]),
         "",
     ]
     (config.output / "summary.md").write_text("\n".join(summary_lines), encoding="utf-8")
@@ -83,6 +137,9 @@ def write_markdown_outputs(
         f"- 中文字符数: `{summary['cjk_character_count']}`",
         f"- 混合 token 数: `{summary['mixed_token_count']}`",
         f"- 说话人标签数: `{len(set(seg.speaker for seg in segments))}`",
+        f"- 语言标签统计: `{format_count_map(summary['language_counts'])}`",
+        f"- 情绪标签统计: `{format_count_map(summary['emotion_counts'])}`",
+        f"- 音频事件统计: `{format_count_map(summary['event_counts'])}`",
         f"- 原始 ASR WER: `{metadata.get('raw_wer')}`",
         f"- 原始 ASR CER: `{metadata.get('raw_cer')}`",
         f"- 展示文本 WER: `{metadata.get('display_wer')}`",
@@ -93,6 +150,14 @@ def write_markdown_outputs(
         "## 说话人统计",
         "",
         *speaker_duration_lines,
+        "",
+        "## 说话人情绪统计",
+        "",
+        *(speaker_emotion_lines or ["- 没有检测到情绪标签。"]),
+        "",
+        "## 说话人音频事件统计",
+        "",
+        *(speaker_event_lines or ["- 没有检测到音频事件。"]),
         "",
         "## 局限性",
         "",
@@ -133,5 +198,11 @@ def write_markdown_outputs(
         "raw_segment_count": metadata.get("raw_segment_count"),
         "postprocess": metadata.get("postprocess"),
         "speaker_durations_seconds": {key: round(value, 3) for key, value in sorted(speaker_durations.items())},
+        "language_counts": summary["language_counts"],
+        "emotion_counts": summary["emotion_counts"],
+        "event_counts": summary["event_counts"],
+        "speaker_emotions": summary["speaker_emotions"],
+        "speaker_events": summary["speaker_events"],
+        "dominant_emotion_by_speaker": summary["dominant_emotion_by_speaker"],
     }
     (config.output / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")

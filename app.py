@@ -172,6 +172,15 @@ def show_metrics(output_dir: Path) -> None:
     cols[4].metric("原始片段", metrics.get("raw_segment_count", "n/a"))
     cols[5].metric("展示片段", metrics.get("segment_count", "n/a"))
 
+    emotion_counts = metrics.get("emotion_counts") or {}
+    event_counts = metrics.get("event_counts") or {}
+    if emotion_counts or event_counts:
+        dominant_emotion = max(emotion_counts.items(), key=lambda item: item[1])[0] if emotion_counts else "n/a"
+        voice_cols = st.columns(3)
+        voice_cols[0].metric("总体主导情绪", dominant_emotion)
+        voice_cols[1].metric("情绪标签片段", sum(emotion_counts.values()))
+        voice_cols[2].metric("音频事件", sum(event_counts.values()))
+
     with st.expander("完整 metrics.json", expanded=False):
         st.json(metrics)
 
@@ -184,16 +193,40 @@ def show_output_files(output_dir: Path, key_prefix: str) -> None:
     report = read_text(output_dir / "report.md")
     segments = read_json(output_dir / "segments.json")
 
-    tabs = st.tabs(["转写文本", "原始 ASR", "摘要", "报告", "Segments JSON"])
+    tabs = st.tabs(["转写文本", "情绪与事件", "原始 ASR", "摘要", "报告", "Segments JSON"])
     with tabs[0]:
         st.markdown(transcript or "还没有生成 transcript.md")
     with tabs[1]:
-        st.markdown(raw_transcript or "还没有生成 raw_transcript.md")
+        voice_rows = []
+        if isinstance(segments, list):
+            for seg in segments:
+                if not isinstance(seg, dict):
+                    continue
+                emotion = seg.get("emotion")
+                events = seg.get("events") or []
+                if not emotion and not events:
+                    continue
+                voice_rows.append(
+                    {
+                        "开始(s)": round(float(seg.get("start", 0.0)), 2),
+                        "说话人": seg.get("speaker", "SPEAKER_00"),
+                        "语言": seg.get("language") or "",
+                        "情绪": emotion or "",
+                        "事件": ", ".join(events),
+                        "文本": seg.get("text", ""),
+                    }
+                )
+        if voice_rows:
+            st.dataframe(voice_rows, width="stretch", hide_index=True)
+        else:
+            st.info("当前结果没有 SenseVoice 情绪或音频事件标签。")
     with tabs[2]:
-        st.markdown(summary or "还没有生成 summary.md")
+        st.markdown(raw_transcript or "还没有生成 raw_transcript.md")
     with tabs[3]:
-        st.markdown(report or "还没有生成 report.md")
+        st.markdown(summary or "还没有生成 summary.md")
     with tabs[4]:
+        st.markdown(report or "还没有生成 report.md")
+    with tabs[5]:
         st.json(segments or {})
 
     transcript_path = output_dir / "transcript.md"
@@ -239,13 +272,24 @@ with st.sidebar:
 
     language = st.text_input("语言代码", value="zh")
     diarizer = st.selectbox("说话人标注", ["cluster", "turns", "pyannote"], index=0)
-    auto_speakers = st.checkbox("自动估计说话人数量", value=True, disabled=diarizer != "cluster")
+    supports_auto_speakers = diarizer in {"cluster", "pyannote"}
+    if "auto_speakers" not in st.session_state:
+        st.session_state["auto_speakers"] = True
+    if not supports_auto_speakers:
+        st.session_state["auto_speakers"] = False
+    auto_speakers = st.checkbox(
+        "自动估计说话人数量",
+        disabled=not supports_auto_speakers,
+        key="auto_speakers",
+        help="cluster 和 pyannote 支持自动估计；turns 需要指定人数。",
+    )
     speakers = st.slider(
         "说话人数量",
         min_value=1,
         max_value=8,
         value=default_speakers,
-        disabled=diarizer == "cluster" and auto_speakers,
+        disabled=supports_auto_speakers and auto_speakers,
+        help="取消自动估计后，使用这里指定的固定人数。",
     )
     compute_type = st.selectbox("Whisper 计算精度", ["int8", "float32"], index=0, disabled=mode != "真实 ASR" or selected_model["engine"] != "faster-whisper")
     cpu_threads = st.slider("CPU 线程", min_value=1, max_value=4, value=1, disabled=mode != "真实 ASR" or selected_model["engine"] != "faster-whisper")
@@ -299,7 +343,7 @@ with main_tab:
                 compute_type=compute_type,
                 cpu_threads=int(cpu_threads),
                 language=language or None,
-                speakers=0 if diarizer == "cluster" and auto_speakers else int(speakers),
+                speakers=0 if supports_auto_speakers and auto_speakers else int(speakers),
                 transcript_file=transcript_file,
                 reference_file=reference_file,
                 diarizer=diarizer,
