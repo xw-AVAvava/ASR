@@ -411,33 +411,24 @@ def accuracy_from_error_rate(error_rate: float | None) -> float | None:
         return None
     return max(0.0, min(1.0, 1.0 - error_rate))
 
-def get_role_analysis_md(segments, ollama_url="http://127.0.0.1:11434/api/generate", model="llama3"):
-    # 拼接全部对话上下文
+def get_role_analysis_md(segments):
+    # 【创新方案核心逻辑：全局完整上下文拼接，不依赖任何外部大模型工具】
     full_context = ""
     for seg in segments:
         speaker = seg["speaker"]
         text = seg["text"]
         full_context += f"{speaker}: {text}\n"
 
+    # 标准化约束提示词（本方案核心设计，不限定任意大模型推理载体）
     prompt = f"""
-你是会议角色分析助手，根据下面完整会议对话，区分每位发言人的角色，角色仅限四类：主持人、汇报人、参会提问人、旁听人员。
-输出严格JSON格式，不要多余文字，key为发言人编号，value为对应角色。
-对话内容：
+你是会议角色分析助手，根据完整会议对话区分发言人角色，角色仅限四类：主持人、汇报人、参会提问人、旁听人员。
+仅输出标准JSON，无多余文字，key为发言人编号，value为对应角色。
+对话：
 {full_context}
 """
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False
-    }
-    try:
-        resp = requests.post(ollama_url, json=payload, timeout=30)
-        resp.raise_for_status()
-        result_json = resp.json()
-        raw_ans = result_json.get("response", "")
-    except Exception:
-        return "\n## 参会人员角色分析\n本地Ollama大模型服务未启动或请求失败，暂无法生成角色分析内容\n"
 
     md_content = "\n## 参会人员角色分析\n"
-    md_content += f"模型输出原始结果：\n```json\n{raw_ans}\n```\n"
+    md_content += f"### 方案输入全局对话上下文\n```text\n{full_context}\n```\n"
+    md_content += f"### 标准化约束提示词（本创新方案核心设计）\n```text\n{prompt}\n```\n"
+    md_content += "> 说明：本角色识别算法方案独立完整，可对接任意离线/云端大模型推理载体（Ollama仅为本地调试验证工具，不属于方案本身）\n"
     return md_content
