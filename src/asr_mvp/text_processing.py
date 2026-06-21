@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import requests
 from pathlib import Path
 import re
 from difflib import SequenceMatcher
@@ -409,3 +410,34 @@ def accuracy_from_error_rate(error_rate: float | None) -> float | None:
     if error_rate is None:
         return None
     return max(0.0, min(1.0, 1.0 - error_rate))
+
+def get_role_analysis_md(segments, ollama_url="http://127.0.0.1:11434/api/generate", model="llama3"):
+    # 拼接全部对话上下文
+    full_context = ""
+    for seg in segments:
+        speaker = seg["speaker"]
+        text = seg["text"]
+        full_context += f"{speaker}: {text}\n"
+
+    prompt = f"""
+你是会议角色分析助手，根据下面完整会议对话，区分每位发言人的角色，角色仅限四类：主持人、汇报人、参会提问人、旁听人员。
+输出严格JSON格式，不要多余文字，key为发言人编号，value为对应角色。
+对话内容：
+{full_context}
+"""
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False
+    }
+    try:
+        resp = requests.post(ollama_url, json=payload, timeout=30)
+        resp.raise_for_status()
+        result_json = resp.json()
+        raw_ans = result_json.get("response", "")
+    except Exception:
+        return "\n## 参会人员角色分析\n本地Ollama大模型服务未启动或请求失败，暂无法生成角色分析内容\n"
+
+    md_content = "\n## 参会人员角色分析\n"
+    md_content += f"模型输出原始结果：\n```json\n{raw_ans}\n```\n"
+    return md_content
