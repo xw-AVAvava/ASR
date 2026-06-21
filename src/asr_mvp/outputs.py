@@ -173,7 +173,7 @@ def write_markdown_outputs(
         "- 比较 `tiny`、`base`、`small` 等 ASR 模型的速度和质量。",
     ]
     # 新增全局上下文参会角色识别拓展模块（算法独立，无外部工具绑定）
-    role_markdown = get_role_analysis_md(all_segments)
+    role_markdown = get_role_analysis_md(segments)
     report_lines.append(role_markdown)
     (config.output / "report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
 
