@@ -415,8 +415,8 @@ def get_role_analysis_md(segments):
     # 【创新方案核心逻辑：全局完整上下文拼接，不依赖任何外部大模型工具】
     full_context = ""
     for seg in segments:
-        speaker = seg["speaker"]
-        text = seg["text"]
+        speaker = seg.speaker
+        text = seg.text
         full_context += f"{speaker}: {text}\n"
 
     # 标准化约束提示词（本方案核心设计，不限定任意大模型推理载体）
