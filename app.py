@@ -296,6 +296,40 @@ with st.sidebar:
     remove_repeated_text = st.checkbox("去除重复语句", value=True)
 
     st.divider()
+    st.subheader("LLM 纠错 (Ollama)")
+    use_llm_correct = st.checkbox("使用 LLM 纠正 ASR 识别错误", value=False)
+    if use_llm_correct:
+        llm_model = st.text_input(
+            "Ollama 模型名称",
+            value="qwen2.5:1.5b",
+            help="需要先在 Ollama 中拉取该模型。首次使用时会自动下载。",
+        )
+        try:
+            from asr_mvp.llm_correction import check_ollama_status, OLLAMA_DEFAULT_BASE_URL
+            ok, msg, models = check_ollama_status(OLLAMA_DEFAULT_BASE_URL)
+            model_installed = llm_model in models if models else False
+            if ok:
+                if model_installed:
+                    st.markdown(
+                        f'<div class="status-box status-ok"><strong>Ollama:</strong> 已连接 · 模型已就绪 · {msg}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div class="status-box status-warn"><strong>Ollama:</strong> 已连接 · 模型"{llm_model}"未安装，运行时会自动下载 · {msg}</div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown(
+                    f'<div class="status-box status-warn"><strong>Ollama:</strong> {msg}</div>',
+                    unsafe_allow_html=True,
+                )
+        except Exception as exc:
+            st.warning(f"无法检查 Ollama 状态: {exc}")
+    else:
+        llm_model = "qwen2.5:1.5b"
+
+    st.divider()
     run_clicked = st.button("运行处理流程", type="primary", width="stretch")
 
 if audio_path is None:
@@ -349,6 +383,8 @@ with main_tab:
                 diarizer=diarizer,
                 remove_repeated_text=remove_repeated_text,
                 speaker_model=None,
+                use_llm_correct=use_llm_correct,
+                llm_model=llm_model,
             )
 
             with st.spinner("正在运行处理流程。首次使用 FunASR 会下载模型，请耐心等待..."):

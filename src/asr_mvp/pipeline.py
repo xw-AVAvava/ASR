@@ -11,6 +11,7 @@ from .audio_io import inspect_audio, load_text
 from .diarization import assign_speakers
 from .outputs import write_markdown_outputs
 from .schemas import PipelineConfig, Segment
+from .llm_correction import correct_segments_with_llm
 from .text_processing import (
     accuracy_from_error_rate,
     character_error_rate,
@@ -53,6 +54,15 @@ def run_pipeline(config: PipelineConfig) -> dict:
         if replacements:
             step += f" + {len(replacements)} custom replacement rules"
         postprocess_steps.append(step)
+
+    if config.use_llm_correct:
+        print(f"[Pipeline] Correcting ASR text with Ollama ({config.llm_model})...", flush=True)
+        segments, llm_corrected = correct_segments_with_llm(
+            segments, model=config.llm_model, base_url=config.llm_base_url,
+        )
+        postprocess_steps.append(
+            f"LLM correction ({config.llm_model}, {llm_corrected}/{len(segments)} segments corrected)"
+        )
 
     speaker_aware_diarizers = {"cluster", "trained-model", "pyannote"}
     speaker_aware_merge = config.diarizer in speaker_aware_diarizers
@@ -181,6 +191,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diarizer", choices=["turns", "cluster", "pyannote", "trained-model"], default="turns")
     parser.add_argument("--speaker-model", type=Path, default=None, help="Optional trained audio classifier .pkl")
     parser.add_argument("--reference-file", type=Path, default=None, help="Optional reference transcript for WER")
+    parser.add_argument(
+        "--use-llm-correct",
+        action="store_true",
+        help="Use Ollama LLM to correct ASR transcription errors",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default="qwen2.5:1.5b",
+        help="Ollama model name for ASR correction (default: qwen2.5:1.5b)",
+    )
     return parser
 
 
@@ -209,6 +229,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         diarizer=args.diarizer,
         speaker_model=args.speaker_model,
         reference_file=args.reference_file,
+        use_llm_correct=args.use_llm_correct,
+        llm_model=args.llm_model,
     )
     result = run_pipeline(config)
     print(json.dumps({"output": result["output"], "metadata": result["metadata"]}, indent=2))

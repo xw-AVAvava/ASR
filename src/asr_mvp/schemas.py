@@ -48,3 +48,6 @@ class PipelineConfig:
     diarizer: str = "turns"
     speaker_model: Path | None = None
     reference_file: Path | None = None
+    use_llm_correct: bool = False
+    llm_model: str = "qwen2.5:1.5b"
+    llm_base_url: str = "http://localhost:11434"
