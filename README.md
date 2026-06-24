@@ -15,7 +15,17 @@
 - 本地离线大模型全局语义参会角色智能识别，区分主持人、汇报人、参会提问人、旁听人员
 - Ollama 本地 LLM 逐句纠错（可选），自动拉取模型，离线可用
 
-论文驱动的创新设计与实验方案见 [说话人感知的情绪与音频事件会议分析](docs/innovation_emotion_events.md)。
+### 研究参考文献（说话人感知的情绪与音频事件会议分析模块）
+本项目将 SenseVoice 的语言、情绪和音频事件标签与匿名说话人结果对齐，形成“谁在什么时候、以什么情绪、说了什么、伴随什么声音事件”的联合时间线：
+
+**FunAudioLLM: Voice Understanding and Generation Foundation Models for Natural Interaction Between Humans and LLMs**
+- 创新说明：[说话人感知的情绪与音频事件会议分析模块创新说明](docs/innovation_emotion_events.md)
+- 论文来源：arXiv 2024
+- 论文页面：[https://arxiv.org/abs/2407.04051](https://arxiv.org/abs/2407.04051)
+- 论文 PDF：[https://arxiv.org/pdf/2407.04051](https://arxiv.org/pdf/2407.04051)
+- 官方实现：[FunAudioLLM/SenseVoice](https://github.com/FunAudioLLM/SenseVoice)
+- 对应创新点：保留并结构化解析 SenseVoice 的语言、情绪和音频事件标签，再与 pyannote 或聚类得到的 `SPEAKER_XX` 对齐。
+- 核心支撑：论文提出 SenseVoice 在同一模型中联合提供多语言 ASR、语音情绪识别和音频事件检测能力。本项目进一步生成说话人级主导情绪、声音事件统计和情绪转折时间线，并在 GUI、Markdown 与 JSON 中统一呈现。
 
 ### 研究参考文献（双VAD融合模块）  
 本项目中双VAD融合与重叠语音检测优化方案参考以下学术文献：  
